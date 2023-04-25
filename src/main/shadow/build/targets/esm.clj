@@ -83,6 +83,21 @@
                   (-> (update :module-externs conj "shadow$export")
                       (update :prepend str "export const $APP = {};\nexport const shadow$provide = {};\n")))
 
+                ;; import depends-on modules
+                (util/reduce->
+                  (fn [state other-mod-id]
+                    (let [other-mod (get modules other-mod-id)]
+                      ;; reference all direct :depends-on modules
+                      ;; default is covered later and added to every module
+                      ;; FIXME: doing this is two stages is confusing, should refactor
+                      ;; done because one works with the ordered :build-modules vector
+                      ;; and this on with the maps, so we can look up by keys
+                      (if (:default other-mod)
+                        state
+                        (update state :prepend str "import \"./" (:output-name other-mod) "\";\n"))))
+                  depends-on)
+
+
                 (util/reduce-kv->
                   (fn [state export-name export-sym]
                     (-> state
@@ -194,7 +209,7 @@
 
         (configure-modules)
 
-        (assoc ::closure/rewrite-shadow-exports true)
+        (assoc ::closure/esm true)
 
         ;; (assoc-in [:compiler-options :chunk-output-type] :esm)
 
@@ -240,8 +255,7 @@
           (data/output-file state output-name))]
 
     ;; skip files we already have
-    (when (or true
-              (not (.exists js-file))
+    (when (or (not (.exists js-file))
               (zero? last-modified)
               ;; js is not compiled but maybe modified
               (> (or compiled-at last-modified)
@@ -266,51 +280,55 @@
   [{:keys [worker-info build-modules] :as state}
    {:keys [module-id output-name exports prepend append sources depends-on] :as mod}]
 
-  (let [target (data/output-file state output-name)]
+  (doseq [src-id sources]
+    (async/queue-task state #(flush-source state src-id)))
 
-    (doseq [src-id sources]
-      (async/queue-task state #(flush-source state src-id)))
+  (let [module-imports
+        (when (seq depends-on)
+          (->> (reverse build-modules)
+               (filter #(contains? depends-on (:module-id %)))
+               (map :output-name)
+               (map #(str "import \"./" % "\";"))
+               (str/join "\n")))
 
-    (let [module-imports
-          (when (seq depends-on)
-            (->> (reverse build-modules)
-                 (filter #(contains? depends-on (:module-id %)))
-                 (map :output-name)
-                 (map #(str "import \"./" % "\";"))
-                 (str/join "\n")))
+        imports
+        (->> sources
+             (remove #{output/goog-base-id})
+             (map #(data/get-source-by-id state %))
+             (map (fn [{:keys [output-name] :as rc}]
 
-          imports
-          (->> sources
-               (remove #{output/goog-base-id})
-               (map #(data/get-source-by-id state %))
-               (map (fn [{:keys [output-name] :as rc}]
+                    (str "import \"./cljs-runtime/" output-name "\";\n"
+                         "SHADOW_ENV.setLoaded(" (pr-str output-name) ");"
+                         )))
+             (str/join "\n"))
 
-                      (str "import \"./cljs-runtime/" output-name "\";\n"
-                           "SHADOW_ENV.setLoaded(" (pr-str output-name) ");"
-                           )))
-               (str/join "\n"))
+        exports
+        (->> exports
+             (map (fn [[export sym]]
+                    (let [export-name (name export)]
+                      (if (= export-name "default")
+                        (str "export default " (cljs-comp/munge sym) ";")
+                        (str "export let " export-name " = " (cljs-comp/munge sym) ";")))))
+             (str/join "\n"))
 
-          exports
-          (->> exports
-               (map (fn [[export sym]]
-                      (let [export-name (name export)]
-                        (if (= export-name "default")
-                          (str "export default " (cljs-comp/munge sym) ";")
-                          (str "export let " export-name " = " (cljs-comp/munge sym) ";")))))
-               (str/join "\n"))
+        out
+        (str prepend "\n"
+             module-imports "\n"
+             imports "\n"
+             exports "\n"
+             append "\n"
+             (when (and worker-info (not (false? (get-in state [::build/config :devtools :enabled]))))
+               (str "shadow.cljs.devtools.client.env.module_loaded(\"" (name module-id) "\");")))]
 
-          out
-          (str prepend "\n"
-               module-imports "\n"
-               imports "\n"
-               exports "\n"
-               append "\n"
-               (when (and worker-info (not (false? (get-in state [::build/config :devtools :enabled]))))
-                 (str "shadow.cljs.devtools.client.env.module_loaded(\"" (name module-id) "\");")))]
-      (io/make-parents target)
-      (spit target out))
 
-    state))
+    ;; only write if output changed, avoids confusing other watchers
+    (if (= out (get-in state [::dev-modules module-id]))
+      state
+      (let [target (data/output-file state output-name)]
+        (io/make-parents target)
+        (spit target out)
+        (assoc-in state [::dev-modules module-id] out)
+        ))))
 
 ;; closure library sometimes changes how goog.global is assigned
 ;; this may cause warnings in some tools because of the remaining
@@ -378,7 +396,10 @@
         (get-in state [:output output/goog-base-id :js])
         "globalThis.goog = goog;"
         "globalThis.shadow$provide = {};"
-        "globalThis.shadow_esm_import = function(x) { return import(x.startsWith(\"./\") ? \".\" + x : x); }"
+        ;; only include helper fn if shadow.esm namespace is actually required
+        ;; otherwise confuses vite
+        (when (get-in state [:sym->id 'shadow.esm])
+          "globalThis.shadow_esm_import = function(x) { return import(x.startsWith(\"./\") ? \".\" + x : x); }")
         "let $CLJS = globalThis.$CLJS = globalThis;"
         (slurp (io/resource "shadow/boot/esm.js"))
 
@@ -388,23 +409,28 @@
        (remove nil?)
        (str/join "\n")))
 
+(defn flush-dev-module-env [state]
+  (let [env-content (js-module-env state)]
+    ;; only actually touch file if needed, avoids confusing other watchers
+    (if (= env-content (::env-content state))
+      state
+      (let [env-file (data/output-file state "cljs-runtime" "cljs_env.js")]
+        (io/make-parents env-file)
+        (spit env-file env-content)
+        (assoc state ::env-content env-content)))))
+
 (defn flush-dev [{::build/keys [config] :keys [build-modules] :as state}]
   (when-not (seq build-modules)
     (throw (ex-info "flush before compile?" {})))
 
   (util/with-logged-time
     [state {:type :flush-unoptimized}]
-
-    (let [env-file (data/output-file state "cljs-runtime" "cljs_env.js")]
-      (io/make-parents env-file)
-      (spit env-file (js-module-env state)))
-
-    (reduce
-      (fn [state mod]
-        (flush-unoptimized-module state mod))
-      state
-      build-modules))
-  state)
+    (-> state
+        (flush-dev-module-env)
+        (util/reduce->
+          (fn [state mod]
+            (flush-unoptimized-module state mod))
+          build-modules))))
 
 (defn inject-polyfill-js [{:keys [polyfill-js] :as state}]
   (update-in state [::closure/modules 0 :prepend] str
@@ -413,42 +439,64 @@
       "export const $jscomp = {};\n")))
 
 (defn setup-imports [state]
-  (update state :build-modules
-    (fn [modules]
-      (let [base-mod (first modules)]
-        (->> modules
-             (map
-               (fn [{:keys [sources] :as mod}]
-                 (let [sources
-                       (->> sources
-                            (map #(data/get-source-by-id state %))
-                            (filter ::js-support/import-shim))
+  (let [js-import-sources
+        (->> (:build-sources state)
+             (map #(data/get-source-by-id state %))
+             (mapcat #(data/deps->syms state %))
+             (set)
+             (map #(data/get-source-by-provide state %))
+             (filter ::js-support/import-shim))
 
-                       externs
-                       (into #{} (map :import-alias) sources)
+        externs
+        (into #{} (map :import-alias) js-import-sources)
 
-                       imports
-                       (->> sources
-                            (map (fn [{:keys [js-import import-alias]}]
-                                   (str "import * as " import-alias " from \"" js-import "\";")))
-                            (str/join "\n"))]
+        imports
+        (reduce
+          (fn [imports {:keys [js-import import-alias]}]
+            ;; import-alias is a symbol
+            (assoc imports (name import-alias) js-import))
+          {}
+          js-import-sources)]
 
-                   (-> mod
-                       (update :module-externs set/union externs)
-                       (update :prepend str-prepend (str imports "\n"))
-                       (cond->
-                         ;; only create shadow_esm_import if shadow.esm was required anywhere
-                         ;; needs to be created in all modules since it must be module local
-                         (get-in state [:sym->id 'shadow.esm])
-                         (update :prepend str "const shadow_esm_import = function(x) { return import(x) };\n")
+    (-> state
+        (assoc ::closure/esm-imports imports)
+        (update :build-modules
+          (fn [modules]
+            (let [base-mod (first modules)]
+              (->> modules
+                   (map
+                     (fn [mod]
 
-                         ;; need access to these in all modules, might import the default mod multiple times
-                         ;; but this is fine and saves having to re-export these in every module
-                         ;; $jscomp is not getting renamed due to possible uses in shadow-js sources
-                         (not (:default mod))
-                         (update :prepend str "import { $APP, shadow$provide, $jscomp } from \"./" (:output-name base-mod) "\";\n"))
-                       ))))
-             (vec))))))
+                       ;; resolve moved the import shims to the common module
+                       ;; for esm tree-shaking of other tools to work, we need them per module
+                       ;; so for all sources of the module also find direct uses of npm packages
+                       ;; just in case multiple modules use them.
+
+                       ;; normally this would go indirectly over a shadow.esm.esm$package = esm$react
+                       ;; assignment which is then made cross-module accessible via $APP
+                       ;; but JS tools don't understand this and never tree shake
+
+                       ;; dev builds still do this but release just has an empty shim to reserve the names
+                       ;; but actually just prepend the imports here
+                       (-> mod
+                           (cond->
+                             (:default mod)
+                             (update :module-externs set/union externs)
+
+                             ;; only create shadow_esm_import if shadow.esm was required anywhere
+                             ;; needs to be created in all modules since it must be module local
+                             (get-in state [:sym->id 'shadow.esm])
+                             (update :prepend str "const shadow_esm_import = function(x) { return import(x) };\n")
+
+                             ;; need access to these in all modules, might import the default mod multiple times
+                             ;; but this is fine and saves having to re-export these in every module
+                             ;; $jscomp is not getting renamed due to possible uses in shadow-js sources
+                             (not (:default mod))
+                             (update :prepend
+                               (fn [prepend]
+                                 (str "import { $APP, shadow$provide, $jscomp } from \"./" (:output-name base-mod) "\";\n" prepend))))
+                           )))
+                   (vec))))))))
 
 ;; in dev all imports must happen in the prepend
 ;; can't do it in the pseudo-module since that evals after all the sources in

@@ -34,7 +34,10 @@
 
 (defn is-shadow-shim? [ns]
   (or (str/starts-with? (str ns) "shadow.js.shim")
-      (str/starts-with? (str ns) "shadow.esm.esm_import$")))
+      ;; :js-provider :import - dev
+      (str/starts-with? (str ns) "shadow.esm.esm_import$")
+      ;; :js-provider :import - release
+      (str/starts-with? (str ns) "esm_import$")))
 
 (defn resolve-js-var [ns sym current-ns]
   ;; quick hack to record all accesses to any JS mod
@@ -266,13 +269,13 @@
              :name cljs.core/Object
              :ns cljs.core}
 
+           (invokeable-ns? sym env)
+           (resolve-invokeable-ns sym current-ns env)
+
            (ana/core-name? env sym)
            (do (when (some? confirm)
                  (confirm env 'cljs.core sym))
                (resolve-cljs-var 'cljs.core sym))
-
-           (invokeable-ns? sym env)
-           (resolve-invokeable-ns sym current-ns env)
 
            ;; short circuit for direct references to a fully qualify closure name eg. goog.math.Integer
            ;; will end up here for anything import such as (:import [goog.module ModuleLoader])
@@ -313,81 +316,95 @@
                       :name (symbol (str current-ns) (str sym))
                       :ns current-ns})
 
-                   ;; attempt to fix
-                   ;; https://dev.clojure.org/jira/browse/CLJS-712
-                   ;; https://dev.clojure.org/jira/browse/CLJS-2957
-                   ;; FIXME: patch this properly in clojurescript so we don't need this hackery
+                   ;; (:require [x :refer (Foo)]) + Foo.Bar uses
+                   ;; :uses is populated as {Foo x} so we return x/Foo.Bar
+                   (if-some [refer-from-ns (ana/gets current-ns-info :uses prefix-sym)]
+                     {:op :var
+                      :name (symbol (str refer-from-ns) (str sym))
+                      :ns refer-from-ns}
 
-                   ;; CLJS defaults to just resolving everything with a dot in it and is completely broken
-                   ;; process.env.FOO ends up as process/env.FOO and never warns
-                   ;; cljs.core.-invoke ends up as cljs/core.-invoke
-                   ;; ANY symbol with a dot should not automatically resolve magically without any further checks
+                     ;; (:require [x :rename {Foo Bar}]) + Bar.X uses
+                     ;; :renames is populated as {Bar x/Foo} so we return x/Foo.X
+                     (if-some [renamed-sym (ana/gets current-ns-info :renames prefix-sym)]
+                       {:op :var
+                        :name (symbol (namespace renamed-sym) (str (name renamed-sym) "." suffix))
+                        :ns (symbol (namespace renamed-sym))}
 
-                   ;; I don't see how this could ever resolve something useful but this is what CLJS does
-                   (if-let [last-hope (ana/gets @env/*compiler* ::ana/namespaces prefix-sym :defs (symbol suffix))]
-                     (merge last-hope
-                       {:op :local
-                        :name (if (= "" prefix-sym) (symbol suffix) (symbol (str prefix-sym) suffix))
-                        :ns prefix-sym})
+                       ;; attempt to fix
+                       ;; https://dev.clojure.org/jira/browse/CLJS-712
+                       ;; https://dev.clojure.org/jira/browse/CLJS-2957
+                       ;; FIXME: patch this properly in clojurescript so we don't need this hackery
 
-                     (let [{:shadow/keys [goog-provides cljs-provides]} @env/*compiler*]
-                       ;; matches goog.DEBUG since goog is provided but goog.DEBUG was no explicit provide
-                       (if (potential-ns-match? goog-provides s)
-                         {:op :js-var
-                          :name (symbol "js" s)
-                          :ns 'js}
+                       ;; CLJS defaults to just resolving everything with a dot in it and is completely broken
+                       ;; process.env.FOO ends up as process/env.FOO and never warns
+                       ;; cljs.core.-invoke ends up as cljs/core.-invoke
+                       ;; ANY symbol with a dot should not automatically resolve magically without any further checks
 
-                         ;; tailrecursion.priority-map.PersistentPriorityMap.EMPTY
-                         ;; is technically an incorrect symbol but munges to the correct one
-                         ;; references like this should not warn since there are far too many of them
-                         ;; so if the symbol starts with a known CLJS ns prefix we'll accept it
-                         ;; although it may not actually contain any analyzer data
-                         ;;
-                         ;; cannot blindly accept by ns-root since clojure.string creates clojure
-                         ;; but clojure.lang does not exist so didn't warn about clojure.lang.MapEntry
-                         (let [hit (potential-ns-match? cljs-provides s)]
-                           (cond
-                             ;; (exists? some.cljs.ns/foo) will emit a runtime lookup for some, some.cljs, some.cljs.ns
-                             ;; but not actually use them in any other way so lets pretend this is a raw JS var
-                             (= hit sym)
+                       ;; I don't see how this could ever resolve something useful but this is what CLJS does
+                       (if-let [last-hope (ana/gets @env/*compiler* ::ana/namespaces prefix-sym :defs (symbol suffix))]
+                         (merge last-hope
+                           {:op :local
+                            :name (if (= "" prefix-sym) (symbol suffix) (symbol (str prefix-sym) suffix))
+                            :ns prefix-sym})
+
+                         (let [{:shadow/keys [goog-provides cljs-provides]} @env/*compiler*]
+                           ;; matches goog.DEBUG since goog is provided but goog.DEBUG was no explicit provide
+                           (if (potential-ns-match? goog-provides s)
                              {:op :js-var
                               :name (symbol "js" s)
                               :ns 'js}
 
-                             ;; partial match
-                             hit
-                             (let [guessed-ns hit
-                                   guessed-sym (symbol (subs s (-> hit str count inc)))]
-
-                               ;; this path happens way too often and should be fixed properly
-                               #_(log/debug ::autofix-symbol
-                                   {:sym sym
-                                    :guessed-ns guessed-ns
-                                    :guessed-sym guessed-sym})
-
-                               ;; although this split will sometimes produce valid matches it won't always work
-                               ;; cljs.core.-invoke works and ens up as cljs.core/-invoke
-                               ;; tailrecursion.priority-map.PersistentPriorityMap.EMPTY
-                               ;; ends as tailrecursion.priority-map/PersistentPriorityMap.EMPTY
-                               ;; since EMPTY is a property the analyzer doesn't not anything about
-
-                               (merge (ana/gets @env/*compiler* ::ana/namespaces guessed-ns :defs guessed-sym)
-                                 {:op :var
-                                  :name (symbol (str guessed-ns) (str guessed-sym))
-                                  :ns guessed-ns}))
-
-                             ;; not known namespace root, resolve as js/ as a last ditch effort
-                             ;; this should probably hard fail instead but that would break too many builds
-                             ;; resolving as js/* is closer to the default behavior
-                             ;; and will most likely be for cases where we are actually accessing a global
-                             ;; ala process.env.FOO which will then warn properly
-                             :else
-                             (do (when (some? confirm)
-                                   (confirm env current-ns sym))
+                             ;; tailrecursion.priority-map.PersistentPriorityMap.EMPTY
+                             ;; is technically an incorrect symbol but munges to the correct one
+                             ;; references like this should not warn since there are far too many of them
+                             ;; so if the symbol starts with a known CLJS ns prefix we'll accept it
+                             ;; although it may not actually contain any analyzer data
+                             ;;
+                             ;; cannot blindly accept by ns-root since clojure.string creates clojure
+                             ;; but clojure.lang does not exist so didn't warn about clojure.lang.MapEntry
+                             (let [hit (potential-ns-match? cljs-provides s)]
+                               (cond
+                                 ;; (exists? some.cljs.ns/foo) will emit a runtime lookup for some, some.cljs, some.cljs.ns
+                                 ;; but not actually use them in any other way so lets pretend this is a raw JS var
+                                 (= hit sym)
                                  {:op :js-var
                                   :name (symbol "js" s)
                                   :ns 'js}
-                                 ))))))))))
+
+                                 ;; partial match
+                                 hit
+                                 (let [guessed-ns hit
+                                       guessed-sym (symbol (subs s (-> hit str count inc)))]
+
+                                   ;; this path happens way too often and should be fixed properly
+                                   #_(log/debug ::autofix-symbol
+                                       {:sym sym
+                                        :guessed-ns guessed-ns
+                                        :guessed-sym guessed-sym})
+
+                                   ;; although this split will sometimes produce valid matches it won't always work
+                                   ;; cljs.core.-invoke works and ens up as cljs.core/-invoke
+                                   ;; tailrecursion.priority-map.PersistentPriorityMap.EMPTY
+                                   ;; ends as tailrecursion.priority-map/PersistentPriorityMap.EMPTY
+                                   ;; since EMPTY is a property the analyzer doesn't not anything about
+
+                                   (merge (ana/gets @env/*compiler* ::ana/namespaces guessed-ns :defs guessed-sym)
+                                     {:op :var
+                                      :name (symbol (str guessed-ns) (str guessed-sym))
+                                      :ns guessed-ns}))
+
+                                 ;; not known namespace root, resolve as js/ as a last ditch effort
+                                 ;; this should probably hard fail instead but that would break too many builds
+                                 ;; resolving as js/* is closer to the default behavior
+                                 ;; and will most likely be for cases where we are actually accessing a global
+                                 ;; ala process.env.FOO which will then warn properly
+                                 :else
+                                 (do (when (some? confirm)
+                                       (confirm env current-ns sym))
+                                     {:op :js-var
+                                      :name (symbol "js" s)
+                                      :ns 'js}
+                                     ))))))))))))
 
            :else
            (when default?
@@ -405,6 +422,12 @@
        (throw (ex-info "missing op" {:sym sym})))
      info
      )))
+
+;; {:keys [Thing]}
+;; symbols destructured out of a map are tagged with '#{any clj-nil}
+;; so they are the same as not tagged at all or just 'any
+(defn any-tag? [tag]
+  (or (nil? tag) (= 'any tag) (and (set? tag) (contains? tag 'any))))
 
 (defn infer-externs-dot
   [{:keys [form form-meta method field target target-tag env prop tag] :as ast}
@@ -431,8 +454,8 @@
                    ;; defrecord
                    (not= "getBasis" sprop)
                    (not (str/starts-with? sprop "cljs$"))
-                   (or (nil? tag) (= 'any tag))
-                   (or (nil? target-tag) (= 'any target-tag))
+                   (any-tag? tag)
+                   (any-tag? target-tag)
                    ;; protocol fns, never need externs for those
                    (not (str/includes? sprop "$arity$"))
                    (not (contains? (:shadow/protocol-prefixes @env/*compiler*) sprop))
@@ -465,7 +488,7 @@
         ;; (def Alias js/Foo)
         ;; (extend-protocol Foo Alias (foo [x] (.shouldNotRename x))
         ;; x will have target-tag that.ns/Alias, resolving to check if that is tagged as js
-        (when (and (qualified-symbol? target-tag) (not (ana/js-tag? target-tag)))
+        (when (and (symbol? target-tag) (not (ana/js-tag? target-tag)))
           (when-let [{:keys [tag]} (shadow-resolve-var env target-tag nil false)]
             (when (ana/js-tag? tag)
               (shadow-js-access-property
@@ -688,6 +711,65 @@
     `(when-not (cljs.core/exists? ~x)
        (def ~x ~init))))
 
+
+;; reify impl using analyze-top, fixes https://clojure.atlassian.net/browse/CLJS-3207
+;; where the closure compiler decides to move some protocol impls to separate modules
+;; but with reify defining the class conditionally it may end up trying to restore the
+;; stub methods before the class is defined.
+
+;; affects spec and another known example is reitit
+
+;; $APP.$reitit$core$t_reitit$0core609782$$.prototype.$reitit$core$Router$routes$arity$1$ = $JSCompiler_unstubMethod$$(5, function() {
+;;  return this.$routes$;
+;; });
+
+(defn shadow-reify
+  [&form &env & impls]
+
+  ;; can't require directly due to circular dependency
+  (let [at (find-var 'shadow.build.compiler/*analyze-top*)]
+    (if (and at @at)
+
+      ;; only use analyze-top if bound, just in case something else tries to compile
+      ;; CLJS from outside shadow-cljs
+      (let [t (with-meta
+                (gensym (str "t_" (str/replace (str (munge ana/*cljs-ns*)) "." "$")))
+                {:anonymous true})
+            meta-sym (gensym "meta")
+            this-sym (gensym "_")
+            locals (keys (:locals &env))]
+
+        (@at
+          `(cljs.core/deftype ~t [~@locals ~meta-sym]
+             cljs.core/IWithMeta
+             (~'-with-meta [~this-sym ~meta-sym]
+               (~'new ~t ~@locals ~meta-sym))
+             cljs.core/IMeta
+             (~'-meta [~this-sym] ~meta-sym)
+             ~@impls))
+
+        `(~'new ~t ~@locals ~(ana/elide-reader-meta (meta &form))))
+
+      ;; default impl if shadow analyze-top is not bound
+      (let [t (with-meta
+                (gensym
+                  (str "t_" (str/replace (str (munge ana/*cljs-ns*)) "." "$")))
+                {:anonymous true})
+            meta-sym (gensym "meta")
+            this-sym (gensym "_")
+            locals (keys (:locals &env))
+            ns (-> &env :ns :name)]
+        `(~'do
+           (cljs.core/when-not (cljs.core/exists? ~(symbol (str ns) (str t)))
+             (cljs.core/deftype ~t [~@locals ~meta-sym]
+               cljs.core/IWithMeta
+               (~'-with-meta [~this-sym ~meta-sym]
+                 (~'new ~t ~@locals ~meta-sym))
+               cljs.core/IMeta
+               (~'-meta [~this-sym] ~meta-sym)
+               ~@impls))
+           (~'new ~t ~@locals ~(ana/elide-reader-meta (meta &form))))))))
+
 ;; https://github.com/clojure/clojurescript/commit/1589e5848ebb56ab451cb73f955dbc0b01e7aba0
 ;; oops, seem to have missed keyword?
 (defn shadow-all-values? [exprs]
@@ -814,7 +896,7 @@
                          (= protocol arg-tag)
                          ;; ignore new type hints for now - David
                          (and (not (set? arg-tag))
-                              (not ('#{any clj clj-or-nil clj-nil number string boolean function object array js} arg-tag))
+                              (not ('#{any clj clj-or-nil clj-nil number string boolean function object array js ignore} arg-tag))
                               (when-let [ps (:protocols (ana/resolve-existing-var env arg-tag))]
                                 (contains? ps protocol)))))]
 
@@ -1019,8 +1101,8 @@
 (defn shadow-add-obj-methods [type type-sym sigs]
   (map (fn [[f & meths :as form]]
          (let [[f meths] (if (vector? (first meths))
-                                [f [(rest form)]]
-                                [f meths])]
+                           [f [(rest form)]]
+                           [f meths])]
            `(set! ~(with-meta
                      (shadow-extend-prefix type-sym f)
                      {:shadow/object-fn f})
@@ -1079,6 +1161,7 @@
 
   (replace-fn! #'cljs.core/goog-define goog-define)
   (replace-fn! #'cljs.core/defonce shadow-defonce)
+  (replace-fn! #'cljs.core/reify shadow-reify)
 
   (replace-fn! #'cljs.core/exists? shadow-exists?)
 

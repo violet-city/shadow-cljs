@@ -1,89 +1,12 @@
 (ns shadow.build.targets.external-index
   (:require
     [clojure.java.io :as io]
+    [clojure.set :as set]
     [clojure.string :as str]
     [shadow.build.data :as data]
     [shadow.build.js-support :as js-support]
-    [shadow.cljs.util :as util]))
-
-(defn into-set [current other]
-  (set (into current other)))
-
-(defn merge-js-deps* [out {:keys [js-deps] :as ns-info}]
-  (-> out
-      (util/reduce->
-        (fn [out require]
-          (update out require merge {}))
-        (get-in ns-info [:meta :external/assets]))
-      (util/reduce-kv->
-        (fn [out id {:keys [as refer default rename]}]
-          (if (or (util/is-absolute? id)
-                  (util/is-relative? id))
-            out
-            (-> out
-                (cond->
-                  as
-                  (assoc-in [id :import-all] true)
-                  refer
-                  (update-in [id :refer] into-set refer)
-                  default
-                  (assoc-in [id :default] true)
-                  rename
-                  (update-in [id :refer] into-set (keys rename))))))
-        js-deps)))
-
-(defn merge-js-deps [ns-info-seq]
-  (->> ns-info-seq
-       (reduce merge-js-deps* {})
-       (reduce-kv
-         (fn [v require info]
-           (conj v (assoc info :require require)))
-         [])
-       ;; to make things sort of stable
-       (sort-by :require)
-       (vec)))
-
-(comment
-  (merge-js-deps
-    '[{:js-deps {"just-refer" {:refer (X Y)}}}
-      {:js-deps {"just-refer" {:refer (X Z)}}}
-      {:js-deps {"./rel.js" {:as x}} :meta {:external/assets ["somewhere/foo.css"]}}
-      {:js-deps {"/abs.js" {:as x}}}
-      {:js-deps {"default" {:default D}}}
-      {:js-deps {"default" {:refer (A B C)}}}
-      {:js-deps {"uses-as" {:as something :refer (X)}}}]))
-
-(defn refer-entries [idx refer]
-  (->> refer
-       (map-indexed (fn [ridx refer]
-                      (str refer " as r_" idx "_" ridx)))
-       (str/join ", ")))
-
-(defn refer-obj [idx default refer]
-  (-> []
-      (cond->
-        default
-        (conj (str "default: d_" idx)))
-      (into (map-indexed (fn [ridx refer] (str refer ": r_" idx "_" ridx)) refer))
-      (->> (str/join ", "))))
-
-(defn generate-esm [state idx {:keys [require refer import-all default] :as entry}]
-  (-> state
-      (update :imports conj (-> "import "
-                                (cond->
-                                  import-all
-                                  (str "* as ns_" idx " ")
-                                  (and (not import-all) default)
-                                  (str "d_" idx ", ")
-                                  (and (not import-all) (seq refer))
-                                  (str "{" (refer-entries idx refer) "}"))
-                                (str " from \"" require "\";")))
-
-      (update :body conj (str "ALL[\"" require "\"] = "
-                              (if import-all
-                                (str "ns_" idx)
-                                (str "{" (refer-obj idx default refer) "}"))
-                              ";"))))
+    [shadow.cljs.util :as util])
+  (:import [java.io BufferedOutputStream FileOutputStream OutputStreamWriter]))
 
 (defn generate-cjs [state require]
   (update state :body conj (str "ALL[\"" require "\"] = require(\"" require "\");")))
@@ -119,7 +42,145 @@
 (comment
   (generate {} #{"react" "something"}))
 
-(defn flush-js [{:keys [build-sources] :as state}]
+(defn flush-esm [{:keys [build-sources] :as state}]
+  (let [js-shim-namespaces
+        (->> build-sources
+             (map #(data/get-source-by-id state %))
+             (filter ::js-support/require-shim)
+             (reduce
+               (fn [acc {:keys [js-require ns]}]
+                 (assoc acc (name ns) js-require))
+               {}))
+
+        used-vars
+        (if (and (= :dev (:shadow.build/mode state))
+                 (not (get-in state [:js-options :external-index-always-optimize])))
+          ;; dev just import * everything
+          (reduce-kv (fn [acc shim-ns _] (assoc acc shim-ns ::STAR)) {} js-shim-namespaces)
+          ;; release mode only imports actual vars
+          ;; need to look for matching namespaces, longest first
+          ;; otherwise it'll put react-dom into the react basket
+          (let [match-prefixes
+                (->> (keys js-shim-namespaces)
+                     (sort-by count)
+                     (reverse))]
+
+            (->> build-sources
+                 (mapcat #(get-in state [:output % :used-vars]))
+                 (filter #(= "js" (namespace %)))
+                 (map name)
+                 (reduce
+                   (fn [acc js-name]
+                     ;;   (:require ["pkg" :as x]) and x used directly
+                     ;; meaning we need
+                     ;;   import * as x from "pkg";
+                     ;; no need to destructure props then
+
+                     ;; (:require ["pkg" :as x]) using x somewhere
+                     (if (contains? js-shim-namespaces js-name)
+                       (assoc acc js-name ::STAR)
+
+                       ;; record individual property access
+                       ;; (:require ["pkg" :as x]) using x/foo
+                       (let [match-ns (first (filter #(str/starts-with? js-name %) match-prefixes))]
+                         (cond
+                           (not match-ns) ;; only want to record shim access
+                           acc
+
+                           ;; don't override * if we encounter another prop
+                           (= ::STAR (get acc match-ns))
+                           acc
+
+                           :else
+                           (let [prop (subs js-name (-> match-ns count inc))
+                                 ;; (:require ["pkg" :as x]) x/foo.bar, only need x/foo
+                                 prop (let [idx (str/index-of prop ".")]
+                                        (if-not idx
+                                          prop
+                                          (subs prop 0 idx)))]
+                             (update acc match-ns util/set-conj prop))))))
+                   {}))))
+
+        aliases
+        (reduce-kv
+          (fn [acc shim-ns _]
+            (assoc acc shim-ns (str "i" (count acc))))
+          {}
+          used-vars)
+
+        output-to
+        (io/file (get-in state [:js-options :external-index] "target/external.js"))]
+
+    (io/make-parents output-to)
+
+    (binding [*out* (-> output-to
+                        (FileOutputStream.)
+                        (BufferedOutputStream.)
+                        (OutputStreamWriter.))]
+
+      ;; first emits all imports
+      (doseq [[shim-ns js-require] js-shim-namespaces]
+        (if-not (contains? used-vars shim-ns)
+          ;; emit unused vars as a side effect import
+          ;; let js tool deal with whether that can be eliminated
+          (println (str "import \"" js-require "\";"))
+          ;; used import, set up as alias
+          (println (str "import * as " (get aliases shim-ns) " from \"" js-require "\";"))))
+
+      ;; then boilerplate
+      (println)
+      (println "const ALL = {};")
+      (println)
+      (println "globalThis.shadow$bridge = function(name) {")
+      (println "  const ret = ALL[name];")
+      (println "  if (ret == undefined) {")
+      (println "    throw new Error(\"Dependency: \" + name + \" not provided by external JS!\");")
+      (println "  } else {")
+      (println "    return ret;")
+      (println "  }")
+      (println "};")
+
+      ;; then do reassignments of all used exports
+      (doseq [[shim-ns js-require] js-shim-namespaces]
+
+        (let [used (get used-vars shim-ns)
+              alias (get aliases shim-ns)]
+          (println)
+
+          ;; (:require ["pkg" :as x]) using x
+          ;; emits as
+          ;;   import * as X from "pkg";
+          ;;   ALL["pkg"] = X;
+          ;; means tree-shaking unlikely for pkg
+          (if (= ::STAR used)
+            (println (str "ALL[\"" js-require "\"] = " alias ";"))
+
+            ;; (:require ["pkg" :as x]) using x/foo x/bar
+            ;; emits as
+            ;;   import * as X from "pkg";
+            ;;   ALL["pkg"] = {foo: X.foo, bar: X.bar};
+            ;; lets tools tree-shake the unused exports, will leave
+            ;;   ALL["pkg"] = {};
+            ;; which is needed as long as shadow$bridge calls aren't removed
+            ;;   var x = shadow$bridge("pkg");
+            ;; if x.foo is used anywhere in optimized code, but just
+            ;;   shadow$bridge("unused");
+            ;; if the return value is never used and removed by DCE
+            ;; FIXME: remove shadow$bridge calls from optimized code when return value is unused
+            ;; we still want to keep the actual import for side-effecting imports such as polyfills
+            ;; let external tool figure out if they are needed or not
+            (do (println (str "ALL[\"" js-require "\"] = {"))
+                (println
+                  (->> used
+                       (map (fn [prop]
+                              (str "  " prop ": " alias "." prop)))
+                       (str/join ",\n")))
+                (println (str "};"))
+                ))))))
+
+  state)
+
+(defn flush-common-js [{:keys [build-sources] :as state}]
   (let [js-requires
         (->> build-sources
              (map #(data/get-source-by-id state %))
@@ -133,3 +194,8 @@
         (io/make-parents output-to)
         (spit output-to (generate state js-requires))
         (assoc state ::ext-info js-requires)))))
+
+(defn flush-js [state]
+  (if (= :esm (get-in state [:js-options :external-index-format]))
+    (flush-esm state)
+    (flush-common-js state)))

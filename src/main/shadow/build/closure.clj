@@ -28,7 +28,7 @@
      PropertyRenamingPolicy PhaseOptimizer CompilerOptions$ChunkOutputType CompilerOptions$ExtractPrototypeMemberDeclarationsMode]
     [shadow.build.closure
      ReplaceCLJSConstants NodeEnvInlinePass ReplaceRequirePass PropertyCollector
-     NodeStuffInlinePass FindSurvivingRequireCalls GlobalsAsVar GlobalVars ShadowESMExports]
+     NodeStuffInlinePass FindSurvivingRequireCalls GlobalsAsVar GlobalVars ShadowESMExports ShadowESMImports]
     [com.google.javascript.jscomp.deps ModuleLoader$ResolutionMode]
     [java.nio.charset Charset]
     [java.util.logging Logger Level]
@@ -163,7 +163,7 @@
   ;; FIXME: maybe make this more customizable. may want es5 but allow class or so
   (when-let [output-feature-set (:output-feature-set opts)]
     (let [fs (kw->feature-set output-feature-set)]
-      (.setOutputFeatureSet closure-opts fs)))
+      (.legacySetOutputFeatureSet closure-opts fs)))
 
   (when-let [extra-annotations (:closure-extra-annotations opts)]
     (. closure-opts (setExtraAnnotationNames (map name extra-annotations))))
@@ -209,6 +209,9 @@
         :local VariableRenamingPolicy/LOCAL
         :all VariableRenamingPolicy/ALL
         (throw (ex-info "invalid :variable-renaming (use :off, :local or :all)" {})))))
+
+  (when (true? (:trusted-strings opts))
+    (.setTrustedStrings closure-opts true))
 
   (when (contains? opts :property-renaming)
     (.setPropertyRenaming
@@ -679,6 +682,26 @@
   (str "function shadow$keyword(name) { return new cljs.core.Keyword(null, name, name, null); };\n"
        "function shadow$keyword_fqn(ns, name) { return new cljs.core.Keyword(ns, name, ns + \"/\" + name, null); };\n"))
 
+;; fake provide all goog.requireType namespaces
+;; that aren't actually provided by any of the build sources
+;; gcc complains about namespaces never being provided if we don't.
+;; not actually feeding the sources into the build since we don't type check
+;; so missing them shouldn't be a problem?
+
+(defn add-missing-goog-require-types [state js-mod]
+  (let [required-types
+        (->> (:build-sources state)
+             (map #(data/get-source-by-id state %))
+             (map :goog-require-types)
+             (remove nil?)
+             (reduce set/union #{})
+             (remove #(get-in state [:sym->id %])))]
+
+    (.add js-mod (closure-source-file "shadow$googRequireTypes.js"
+                   (->> required-types
+                        (map #(str "goog.provide('" % "');"))
+                        (str/join "\n"))))))
+
 (defn make-js-modules
   [{:keys [build-modules build-sources] :as state}]
 
@@ -718,6 +741,9 @@
                            {:id module-id :other other-mod-id})))
 
                 (.addDependency js-mod other-mod))
+
+              (when-not (seq depends-on)
+                (add-missing-goog-require-types state js-mod))
 
               ;; every module that does not contain cljs.core will get a .constants js files as its first input
               ;; so the ReplaceCLJSConstants pass can write them into that file
@@ -839,15 +865,22 @@
                         ns
                         (->> (get-in compiler-env [::ana/namespaces ns :defs])
                              (vals)
-                             (filter #(get-in % [:meta :export]))
-                             (map :name)
-                             (map (fn [def]
-                                    (let [export-name (-> def name str)
+                             (filter #(or (get-in % [:meta :export])
+                                          (get-in % [:meta :export-as])))
+                             (map (fn [{def :name :as ns-def}]
+                                    (let [export-as (get-in ns-def [:meta :export-as])
                                           export-name
-                                          (if (= "default" export-name)
-                                            export-name
-                                            (-> export-name (comp/munge) (core-ext/safe-pr-str)))]
-                                      (str export-name ":" (comp/munge def)))))
+                                          (if (string? export-as)
+                                            ;; no munging for user specified export names
+                                            ;; still needs to be a string
+                                            export-as
+                                            (let [export-name (-> def name str)]
+                                              (if (= "default" export-name)
+                                                export-name
+                                                (-> export-name (comp/munge)))))]
+                                      ;; escape property name to become {"thing":demo.foo.thing}
+                                      ;; {thing: demo.foo.thing} might get renamed
+                                      (str (core-ext/safe-pr-str export-name) ":" (comp/munge def)))))
                              (str/join ",")
                              (as-module-exports))
 
@@ -897,11 +930,14 @@
                      :js-module (get js-mods resource-id)
                      :sources [resource-id]}))
              (into [{:module-id output/goog-base-id
+                     :goog-mod true
                      :output-name "cljs_env.js"
                      :js-module goog-mod
                      :sources (->> goog-sources
                                    (map :resource-id)
                                    (into []))}]))]
+
+    (add-missing-goog-require-types state goog-mod)
 
     (assoc state ::modules modules)))
 
@@ -1142,8 +1178,29 @@
 
     ;; FIXME: this just adds export as configured by name
     ;; what is there is a clash with the exports generated by the closure compiler?
-    (when (::rewrite-shadow-exports state)
+    (when (::esm state)
       (ShadowESMExports/process compiler))
+
+    ;; this pass adds back all esm imports, since we can't tell the closure compiler to keep them alive
+    ;; just finds all references to esm_import$* things and adds the import statements per module
+    ;; have to do this here since the references may have moved cross module
+    ;; can't do this before compilation because of that
+    (when-some [imports (::esm-imports state)]
+
+      ;; :advanced may remove unused imports. sometimes we want to keep them for side-effects.
+      ;; forcing this via build config per module :force-imports #{"foo" "bar"}
+      ;; note that this may force inclusion of imports that aren't actually part of the build
+      ;; this is fine, since all we emit is `import "that-thing";` on user request
+      (let [forced-imports
+            (reduce
+              (fn [acc {:keys [module-id force-imports]}]
+                (if-not (seq force-imports)
+                  acc
+                  (assoc acc (name module-id) force-imports)))
+              {}
+              modules)]
+
+        (ShadowESMImports/process compiler imports forced-imports)))
 
     (-> state
         (assoc ::result result ::injected-libs injected-libs)
@@ -1257,25 +1314,28 @@
   ;; FIXME: could do this in compile-modules
   [{::keys [modules dead-modules dead-sources] :as state}]
   (let [env-prepend
-        "var window=global;var $CLJS=require(\"./cljs_env\");"]
+        "var window=global;var $CLJS=require(\"./cljs_env.js\");"]
 
     (update state ::modules
       (fn [modules]
         (->> modules
-             (map (fn [{:keys [name js-module] :as mod}]
-                    (let [requires
-                          (->> (get-js-module-requires state js-module)
-                               (map #(.getName %))
-                               (distinct)
-                               (map #(str "require(\"./" % "\");"))
-                               (str/join ""))]
+             (map (fn [{:keys [goog-mod js-module] :as mod}]
+                    (if goog-mod
+                      (update mod :prepend #(str "var $CLJS = module.exports = {};\n" %))
+                      (let [requires
+                            (->> (get-js-module-requires state js-module)
+                                 (map #(.getName %))
+                                 (remove #{"cljs_env.js"})
+                                 (distinct)
+                                 (map #(str "require(\"./" % "\");"))
+                                 (str/join ""))]
 
-                      (-> mod
-                          ;; the npm prepend must be one line, will mess up source lines otherwise
-                          (update :prepend #(str env-prepend requires #_"$.module=module;\n" "\n" %))
-                          ;; the set this to null so it doesn't leak to other modules
-                          ;; (update :append str "$.module=null;")
-                          ))))
+                        (-> mod
+                            ;; the npm prepend must be one line, will mess up source lines otherwise
+                            (update :prepend #(str env-prepend requires #_"$.module=module;\n" "\n" %))
+                            ;; the set this to null so it doesn't leak to other modules
+                            ;; (update :append str "$.module=null;")
+                            )))))
              (into []))))))
 
 (defn- set-check-only
@@ -1942,9 +2002,6 @@
         require-replacements
         (require-replacement-map state)
 
-        replace-require-pass
-        (ReplaceRequirePass. cc require-replacements)
-
         closure-opts
         (doto (make-options)
           (set-options co-opts state)
@@ -1965,8 +2022,6 @@
           (.addCustomPass CustomPassExecutionTime/BEFORE_CHECKS
             (NodeStuffInlinePass. cc))
 
-          (.addCustomPass CustomPassExecutionTime/BEFORE_CHECKS replace-require-pass)
-
           ;; google SourceMapResolver is broken since it always resolves source map files relative
           ;; from the input name not from its original path. since we always use the resource-name
           ;; as the input it can never find anything. can't use the full path as input as that
@@ -1981,9 +2036,19 @@
           (.setWarningLevel DiagnosticGroups/CHECK_USELESS_CODE CheckLevel/OFF)
           (.setNumParallelThreads (get-in state [:compiler-options :closure-threads] 1)))
 
+        js-provider
+        (get-in state [:js-options :js-provider])
+
+        ;; classpath commonjs may still use require, npm packages are not processed by external
+        ;; so for :external we want to keep them as is, so the bridge can provide them
+        _ (when (not= :external js-provider)
+            (let [replace-require-pass
+                  (ReplaceRequirePass. cc require-replacements)]
+              (.addCustomPass closure-opts CustomPassExecutionTime/BEFORE_CHECKS replace-require-pass)))
+
         ;; :js-provider :shadow uses this for es6 on the classpath
         ;; we want to collect the props only for :shadow not :closure
-        _ (when (= :shadow (get-in state [:js-options :js-provider]))
+        _ (when (= :shadow js-provider)
             (.addCustomPass closure-opts CustomPassExecutionTime/AFTER_OPTIMIZATION_LOOP property-collector))
 
         ;; GCC doesn't seem to track polyfills properly in some cases and just fails to compile

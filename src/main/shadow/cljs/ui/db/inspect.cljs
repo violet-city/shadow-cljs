@@ -73,18 +73,30 @@
         )))
 
 (defn guess-display-type [{:keys [db] :as env} {:keys [data-type supports] :as summary}]
-  (let [pref (get-in db [::m/ui-options :preferred-display-type])]
-    (if (contains? supports pref)
-      pref
-      (cond
-        (contains? supports :fragment)
-        :browse
+  (let [pref (::m/preferred-display-type db :browse)]
 
-        (contains? #{:string :number :boolean} data-type)
-        :str
+    (cond
+      (and (= :pprint pref) (contains? supports :obj-pprint))
+      :pprint
 
-        :else
-        :edn))))
+      (and (= :browse pref) (contains? supports :obj-fragment))
+      :browse
+
+      (= :edn pref)
+      :edn
+      
+      (contains? supports :obj-fragment)
+      :browse
+
+      (contains? #{:string :number :boolean} data-type)
+      :edn
+
+      (contains? supports :obj-pprint)
+      :pprint
+
+      :default
+      :edn
+      )))
 
 (defmethod relay-ws/handle-msg :tap-subscribed
   [env {:keys [from history] :as msg}]
@@ -173,10 +185,9 @@
     ;; leaving this as a hack for now until I can think of something cleaner
     :hack
     (do (relay-ws/call! env
-          {:op :obj-request
+          {:op :obj-edn-limit
            :to runtime-id
            :oid oid
-           :request-op :edn-limit
            :limit 150}
 
           {:e ::obj-preview-result})
@@ -226,10 +237,9 @@
 
     :hack
     (do (relay-ws/call! env
-          {:op :obj-request
+          {:op :obj-edn
            :to runtime-id
-           :oid oid
-           :request-op :edn}
+           :oid oid}
 
           {:e ::obj-as-result
            :ident (:db/ident current)
@@ -246,10 +256,9 @@
 
     :hack
     (do (relay-ws/call! env
-          {:op :obj-request
+          {:op :obj-str
            :to runtime-id
-           :oid oid
-           :request-op :str}
+           :oid oid}
           {:e ::obj-as-result
            :ident (:db/ident current)
            :key :str})
@@ -265,10 +274,9 @@
 
     :hack
     (do (relay-ws/call! env
-          {:op :obj-request
+          {:op :obj-pprint
            :to runtime-id
-           :oid oid
-           :request-op :pprint}
+           :oid oid}
           {:e ::obj-as-result
            :ident (:db/ident current)
            :key :pprint})
@@ -285,10 +293,10 @@
     (do (throw (ex-info "FIXME: summary not loaded yet for vlist" {:current current}))
         :db/loading)
 
-    (let [{:keys [entries]} summary
+    (let [{:keys [data-count]} summary
 
           start-idx offset
-          last-idx (js/Math.min entries (+ start-idx num))
+          last-idx (js/Math.min data-count (+ start-idx num))
 
           slice
           (->> (range start-idx last-idx)
@@ -302,7 +310,7 @@
 
       ;; all requested elements are already present
       (if slice
-        {:item-count entries
+        {:item-count data-count
          :offset offset
          :slice (persistent! slice)}
 
@@ -310,12 +318,11 @@
         ;; FIXME: should be smarter about which elements to fetch
         ;; might already have some
         (do (relay-ws/call! env
-              {:op :obj-request
+              {:op :obj-fragment
                :to runtime-id
                :oid oid
                :start start-idx
                :num num
-               :request-op :fragment
                :key-limit 160
                :val-limit 160}
               {:e ::fragment-slice-loaded
@@ -387,12 +394,11 @@
          :slice (persistent! slice)}
 
         (do (relay-ws/call! env
-              {:op :obj-request
+              {:op :obj-lazy-chunk
                :to runtime-id
                :oid oid
                :start start-idx
                :num num
-               :request-op :chunk
                :val-limit 100}
 
               {:e ::lazy-seq-slice-loaded
@@ -448,10 +454,9 @@
 
     ;; FIXME: fx this
     (relay-ws/call! env
-      {:op :obj-request
+      {:op :obj-nav
        :to runtime-id
        :oid oid
-       :request-op :nav
        :idx idx
        :summary true}
 
@@ -465,36 +470,63 @@
   {::ev/handle ::inspect-nav-result}
   [env {:keys [panel-idx call-result] :as tx}]
 
-  (assert (= :obj-result-ref (:op call-result))) ;; FIXME: handle failures
+  (case (:op call-result)
+    :obj-result
+    env
 
-  (update env :db
-    (fn [db]
-      (let [{:keys [ref-oid from summary]}
-            call-result
+    ;; FIXME: decide if :obj-result should do anything
+    ;; just returning env when the nav returns :obj-result instead of :obj-result-ref
+    ;; it returns :obj-result for simple values such as nil, boolean, empty colls, etc
+    ;; the assumption is that the current display already showed sufficient info
+    ;; to make an extra panel redundant
+    ;; we could maybe guess this based on the fragment value we get when displaying the results
+    ;; but nav may turn a simple 1 into a db lookup and return actual map
+    ;; so need to ask remote to confirm first
+    #_(update env :db
+        (fn [db]
+          (let [{:keys [result]}
+                call-result
 
-            obj
-            {:oid ref-oid
-             :runtime-id from
-             :runtime (db/make-ident ::m/runtime from)
-             :summary summary
-             :display-type (guess-display-type env summary)}
+                {:keys [stack]}
+                (::m/inspect db)
 
-            obj-ident
-            (db/make-ident ::m/object ref-oid)
+                stack
+                (-> (subvec stack 0 (inc panel-idx))
+                    (conj {:type :local-object-panel
+                           :value result}))]
 
-            {:keys [stack]}
-            (::m/inspect db)
+            (-> db
+                (assoc-in [::m/inspect :stack] stack)
+                (assoc-in [::m/inspect :current] (inc panel-idx))))))
 
-            stack
-            (-> (subvec stack 0 (inc panel-idx))
-                (conj {:type :object-panel
-                       :ident obj-ident}))]
+    :obj-result-ref
+    (update env :db
+      (fn [db]
+        (let [{:keys [ref-oid from summary]}
+              call-result
 
+              obj
+              {:oid ref-oid
+               :runtime-id from
+               :runtime (db/make-ident ::m/runtime from)
+               :summary summary
+               :display-type (guess-display-type env summary)}
 
-        (-> db
-            (db/add ::m/object obj)
-            (assoc-in [::m/inspect :stack] stack)
-            (assoc-in [::m/inspect :current] (inc panel-idx)))))))
+              obj-ident
+              (db/make-ident ::m/object ref-oid)
+
+              {:keys [stack]}
+              (::m/inspect db)
+
+              stack
+              (-> (subvec stack 0 (inc panel-idx))
+                  (conj {:type :object-panel
+                         :ident obj-ident}))]
+
+          (-> db
+              (db/add ::m/object obj)
+              (assoc-in [::m/inspect :stack] stack)
+              (assoc-in [::m/inspect :current] (inc panel-idx))))))))
 
 (defn inspect-set-current!
   {::ev/handle ::m/inspect-set-current!}

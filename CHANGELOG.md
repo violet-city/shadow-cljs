@@ -1,5 +1,149 @@
 # Changelog
 
+## [2.23.2](https://github.com/thheller/shadow-cljs/compare/177d5964ec13fcd9c1de7a9156f615b37ae44691...177d5964ec13fcd9c1de7a9156f615b37ae44691) - 2023-04-22
+- [ [`177d5`](https://github.com/thheller/shadow-cljs/commit/177d5964ec13fcd9c1de7a9156f615b37ae44691) ] fix warning related to ignore symbol
+
+## [2.23.1](https://github.com/thheller/shadow-cljs/compare/ee382ce37dceb54b2bb0a826664ddae7b6de47ca...c4052fe6afb38733ea103bbd29a2dfb6ec695847) - 2023-04-21
+- [ [`c4052`](https://github.com/thheller/shadow-cljs/commit/c4052fe6afb38733ea103bbd29a2dfb6ec695847) ] closure-compiler bump
+- [ [`ee382`](https://github.com/thheller/shadow-cljs/commit/ee382ce37dceb54b2bb0a826664ddae7b6de47ca) ] add :print-table option to build-report hook
+
+## [2.22.10](https://github.com/thheller/shadow-cljs/compare/0a680ae8e55ef4b8dbcf89be447974a9002e26a6...0a680ae8e55ef4b8dbcf89be447974a9002e26a6) - 2023-04-07
+- [ [`0a680`](https://github.com/thheller/shadow-cljs/commit/0a680ae8e55ef4b8dbcf89be447974a9002e26a6) ] optimize :esm flush, avoid needless fs writes
+
+## [2.22.9](https://github.com/thheller/shadow-cljs/compare/3d87940d69e70a6ccbeb074a225cc54cfc2dc41a...4d2d281b1290726cc65832466c5d9766332df427) - 2023-03-29
+- [ [`4d2d2`](https://github.com/thheller/shadow-cljs/commit/4d2d281b1290726cc65832466c5d9766332df427) ] add option to force side-effect esm imports
+- [ [`c0720`](https://github.com/thheller/shadow-cljs/commit/c0720959929c6eae3a617b291f48b863f8ac070f) ] omit shadow_esm_import unless actually required
+- [ [`3d879`](https://github.com/thheller/shadow-cljs/commit/3d87940d69e70a6ccbeb074a225cc54cfc2dc41a) ] fix firefox UI issue
+
+## [2.22.8](https://github.com/thheller/shadow-cljs/compare/ba90e873c80389ad2d146825ed59bf3cedc48804...ba90e873c80389ad2d146825ed59bf3cedc48804) - 2023-03-27
+- [ [`ba90e`](https://github.com/thheller/shadow-cljs/commit/ba90e873c80389ad2d146825ed59bf3cedc48804) ] fix :js-provider :external for classpath commonjs
+
+## [2.22.7](https://github.com/thheller/shadow-cljs/compare/3089f270fceb8ba7dd800e0c55ff3c9793214865...e537ac1f9f985f580ee496e367440fe3f24ef1dc) - 2023-03-22
+- [ [`e537a`](https://github.com/thheller/shadow-cljs/commit/e537ac1f9f985f580ee496e367440fe3f24ef1dc) ] account for nested dots in external ESM
+- [ [`3089f`](https://github.com/thheller/shadow-cljs/commit/3089f270fceb8ba7dd800e0c55ff3c9793214865) ] add always optimize flag for external ESM
+
+## [2.22.6](https://github.com/thheller/shadow-cljs/compare/20b1dd3567ccec786ef27ea930d25c53fb4dc979...20b1dd3567ccec786ef27ea930d25c53fb4dc979) - 2023-03-21
+- [ [`20b1d`](https://github.com/thheller/shadow-cljs/commit/20b1dd3567ccec786ef27ea930d25c53fb4dc979) ] fix external ESM unused requires getting dropped
+
+## [2.22.5](https://github.com/thheller/shadow-cljs/compare/52e23b22e50723d7a8223df225b7c6e95252a1b7...52e23b22e50723d7a8223df225b7c6e95252a1b7) - 2023-03-20
+- [ [`52e23`](https://github.com/thheller/shadow-cljs/commit/52e23b22e50723d7a8223df225b7c6e95252a1b7) ] some more external ESM fixes
+
+## [2.22.4](https://github.com/thheller/shadow-cljs/compare/39bf7bb28865650ef953bb0850b84780774d9108...39bf7bb28865650ef953bb0850b84780774d9108) - 2023-03-20
+- [ [`39bf7`](https://github.com/thheller/shadow-cljs/commit/39bf7bb28865650ef953bb0850b84780774d9108) ] fix ESM external index
+
+## [2.22.3](https://github.com/thheller/shadow-cljs/compare/20df278860629e66ee3eefbd1990d30f8ac731fc...20df278860629e66ee3eefbd1990d30f8ac731fc) - 2023-03-20
+- [ [`20df2`](https://github.com/thheller/shadow-cljs/commit/20df278860629e66ee3eefbd1990d30f8ac731fc) ] add ESM format for :js-provider :external
+
+## [2.22.2](https://github.com/thheller/shadow-cljs/compare/3975248fd86713e9dea8aa7cb19a1e111458ed82...505670b67232f128418ffd740de12291f2082432) - 2023-03-12
+- [ [`50567`](https://github.com/thheller/shadow-cljs/commit/505670b67232f128418ffd740de12291f2082432) ] turn ESM exports into const for release builds
+- [ [`39752`](https://github.com/thheller/shadow-cljs/commit/3975248fd86713e9dea8aa7cb19a1e111458ed82) ] add rough UI settings pane
+
+## [2.22.1](https://github.com/thheller/shadow-cljs/compare/c84c18630606a08ab86d9e2cd3a86c693cd605a7...683234037cc360f9d27ad7d00cecce76f13a7199) - 2023-03-11
+- [ [`68323`](https://github.com/thheller/shadow-cljs/commit/683234037cc360f9d27ad7d00cecce76f13a7199) ] fix goog.requireType dependency ordering problem
+- [ [`c84c1`](https://github.com/thheller/shadow-cljs/commit/c84c18630606a08ab86d9e2cd3a86c693cd605a7) ] less restrictive :npm-module, for some experiments
+
+## [2.22.0](https://github.com/thheller/shadow-cljs/compare/ac8b33e7643d187845b68f6ac4acb4fc3e043949...5168aff39ddb21ddc5f6e18828456cc73c216e65) - 2023-03-08
+- [ [`5168a`](https://github.com/thheller/shadow-cljs/commit/5168aff39ddb21ddc5f6e18828456cc73c216e65) ] closure compiler+lib bump
+- [ [`7d6ca`](https://github.com/thheller/shadow-cljs/commit/7d6ca44906143a69eb5999ce23d67641fe870073) ] hot-reload/REPL for :npm-module :runtime :node
+- [ [`78851`](https://github.com/thheller/shadow-cljs/commit/78851756b162c242270fcad08cff58f1a8f5380b) ] fix npm-module output in REPL contexts
+- [ [`ce92e`](https://github.com/thheller/shadow-cljs/commit/ce92e41ebea65c499fb2cba9b19179e9c430ab71) ] fix repl impl
+- [ [`af1a7`](https://github.com/thheller/shadow-cljs/commit/af1a77099e69b09c3799a8b64e169cd24d379a72) ] move up declare
+- [ [`d39ed`](https://github.com/thheller/shadow-cljs/commit/d39edc7d70fdc5d6e39d8fc24a81285d91954381) ] remove obsolete tests
+- [ [`fe0c7`](https://github.com/thheller/shadow-cljs/commit/fe0c7836588908a010ef6d7a0246cd32e156912d) ] change how require in REPL works
+- [ [`77c52`](https://github.com/thheller/shadow-cljs/commit/77c529540ad73f8e95a87e26bb920c7657db85c9) ] add support for chrome source map extensions
+- [ [`a7229`](https://github.com/thheller/shadow-cljs/commit/a7229169b81f315745e336fda4e79c8cb41e0471) ] remove noise from warnings in library code
+- [ [`b00f8`](https://github.com/thheller/shadow-cljs/commit/b00f837606561c2da99e29ef55e8ce01e47ab5bb) ] restore :obj-request op, other libs use it
+- [ [`c863f`](https://github.com/thheller/shadow-cljs/commit/c863f54648c6e23507959c5e6d8e0fa4229134e7) ] rewrite obj-support some more
+- [ [`ac8b3`](https://github.com/thheller/shadow-cljs/commit/ac8b33e7643d187845b68f6ac4acb4fc3e043949) ] move insight files for make CI happy
+
+## [2.21.0](https://github.com/thheller/shadow-cljs/compare/62fb3f841f118d05c0c9fba0dc7129ec1f88a23f...2a6e483da80ee8d7c7785c5a3d714e23da244e52) - 2023-02-19
+- [ [`2a6e4`](https://github.com/thheller/shadow-cljs/commit/2a6e483da80ee8d7c7785c5a3d714e23da244e52) ] closure-compiler bump
+- [ [`55a08`](https://github.com/thheller/shadow-cljs/commit/55a086aa48a6baba91d592b5906335a15ed1f2c9) ] add support for :export-as in :npm-module builds
+- [ [`8df61`](https://github.com/thheller/shadow-cljs/commit/8df61f433e4ab8ce43c1ef7673dcbf11dd7d1db6) ] rewrite a bunch of shadow.remote related things
+- [ [`e06c2`](https://github.com/thheller/shadow-cljs/commit/e06c27e7ca5f9d4cfefa097345b95e0a172601a7) ] fix shadow-analyze-top dropping return value in REPL
+- [ [`37ab1`](https://github.com/thheller/shadow-cljs/commit/37ab13297fda2a1d60b55ed33ab886901a17ddf1) ] fix build report not grouping npm packages
+- [ [`0f849`](https://github.com/thheller/shadow-cljs/commit/0f8498f190ef0a836125ea3278535bfdd18f917d) ] set :es5 as default dev output-feature-set for RN
+- [ [`3c98a`](https://github.com/thheller/shadow-cljs/commit/3c98a4e009562c0087fffff13833c87aede65877) ] also check peerDependencies for deps.cljs install
+- [ [`a2488`](https://github.com/thheller/shadow-cljs/commit/a2488e123857fff5d02c05616ec37772736a6fd6) ] more helpful msg when source code read fails
+- [ [`c8ec4`](https://github.com/thheller/shadow-cljs/commit/c8ec4d0f9346751feab934c70561eee1f425a262) ] fix ui route not handling / properly
+- [ [`c870d`](https://github.com/thheller/shadow-cljs/commit/c870dd7f50ab9897c262cba5c464bfb293da6886) ] add shadow.remote example CLJ client
+- [ [`94b76`](https://github.com/thheller/shadow-cljs/commit/94b766df7aaed62f5b143f6c6304b10234cc1bb9) ] bump jar downloader
+- [ [`62fb3`](https://github.com/thheller/shadow-cljs/commit/62fb3f841f118d05c0c9fba0dc7129ec1f88a23f) ] Bump s3-wagon-private to a version where there isn't a dependency to a version of jackson-databind which is vulnerable to CVE-2020-10650 and aws-java-sdk-s3 which is vulnerable to CVE-2022-31159 (#1082)
+
+## [2.20.20](https://github.com/thheller/shadow-cljs/compare/99b2714014d52578a3eeec2a53016bc3a9731b45...99b2714014d52578a3eeec2a53016bc3a9731b45) - 2023-01-13
+- [ [`99b27`](https://github.com/thheller/shadow-cljs/commit/99b2714014d52578a3eeec2a53016bc3a9731b45) ] pass :dev-http options through to file/classpath root handlers
+
+## [2.20.19](https://github.com/thheller/shadow-cljs/compare/7009d08432fbf1869ffc523363370ce0fcd1a307...9d0ffb63af9518efd13ffca28321da05cf2c0b2f) - 2023-01-10
+- [ [`9d0ff`](https://github.com/thheller/shadow-cljs/commit/9d0ffb63af9518efd13ffca28321da05cf2c0b2f) ] closure compiler bump & fix
+- [ [`7009d`](https://github.com/thheller/shadow-cljs/commit/7009d08432fbf1869ffc523363370ce0fcd1a307) ] fix bad quoting in shadow-reify
+
+## [2.20.18](https://github.com/thheller/shadow-cljs/compare/573b9eb8b5bd0c68b665df34b46393993d6fbeb2...db9bf83562db0276f09a7c432faf247440b7e2c3) - 2023-01-09
+- [ [`db9bf`](https://github.com/thheller/shadow-cljs/commit/db9bf83562db0276f09a7c432faf247440b7e2c3) ] fix :npm-module release output
+- [ [`2b918`](https://github.com/thheller/shadow-cljs/commit/2b9185459fcdd1fa8c03ffb21712ae97ae9f0f70) ] rewrite reify to use analyze-top, fixes CLJS-3207
+- [ [`573b9`](https://github.com/thheller/shadow-cljs/commit/573b9eb8b5bd0c68b665df34b46393993d6fbeb2) ] fix unused reload! function
+
+## [2.20.17](https://github.com/thheller/shadow-cljs/compare/f35faabd94add4bc7a48df8a80483d6f9e5f6636...f35faabd94add4bc7a48df8a80483d6f9e5f6636) - 2023-01-04
+- [ [`f35fa`](https://github.com/thheller/shadow-cljs/commit/f35faabd94add4bc7a48df8a80483d6f9e5f6636) ] add externs inference warnings for destructured bindings
+
+## [2.20.16](https://github.com/thheller/shadow-cljs/compare/0275661910fd356ae3312e834ef76546a42777d6...0275661910fd356ae3312e834ef76546a42777d6) - 2022-12-23
+- [ [`02756`](https://github.com/thheller/shadow-cljs/commit/0275661910fd356ae3312e834ef76546a42777d6) ] remove unused requires
+
+## [2.20.15](https://github.com/thheller/shadow-cljs/compare/c75498fe9c5e5e01943f8746d5f4113f210a1e80...e3e7d49d0f44925edb9d678a6d5ccf72cd72bc88) - 2022-12-17
+- [ [`e3e7d`](https://github.com/thheller/shadow-cljs/commit/e3e7d49d0f44925edb9d678a6d5ccf72cd72bc88) ] add a few more cases for dotted symbol resolve
+- [ [`c7549`](https://github.com/thheller/shadow-cljs/commit/c75498fe9c5e5e01943f8746d5f4113f210a1e80) ] prioritze invokeable namespace aliases over core names
+
+## [2.20.14](https://github.com/thheller/shadow-cljs/compare/1bbd1103ab3f7d21580a1b6dfed70d8de1d56fb1...1bbd1103ab3f7d21580a1b6dfed70d8de1d56fb1) - 2022-12-08
+- [ [`1bbd1`](https://github.com/thheller/shadow-cljs/commit/1bbd1103ab3f7d21580a1b6dfed70d8de1d56fb1) ] fix source map generation for shadow-js files
+
+## [2.20.13](https://github.com/thheller/shadow-cljs/compare/7e8b27fe02401956fff294f7affe51d67f55f3c2...42528e286305295200dacb2d70293150a3b74f4d) - 2022-12-01
+- [ [`42528`](https://github.com/thheller/shadow-cljs/commit/42528e286305295200dacb2d70293150a3b74f4d) ] small dep bump
+- [ [`c64e7`](https://github.com/thheller/shadow-cljs/commit/c64e77ad54988d6679a0eae6455877f1dadfb776) ] add :checked-arrays binding in compiler
+- [ [`581c2`](https://github.com/thheller/shadow-cljs/commit/581c2829e4c09f9328c6866d3fa6aa22b9c4b63f) ] fix :target :esm import handling to work cross-module
+- [ [`7e8b2`](https://github.com/thheller/shadow-cljs/commit/7e8b27fe02401956fff294f7affe51d67f55f3c2) ] properly fix dev-http push-state looking for nested indexes
+
+## [2.20.12](https://github.com/thheller/shadow-cljs/compare/8f14c6ba368642cb030bfe724edc96a884e2ebf8...c6598d47a3c30c44691d50cc05ac31c579927710) - 2022-11-17
+- [ [`c6598`](https://github.com/thheller/shadow-cljs/commit/c6598d47a3c30c44691d50cc05ac31c579927710) ] downgrade core.async until AOT issues are resolved
+- [ [`8f14c`](https://github.com/thheller/shadow-cljs/commit/8f14c6ba368642cb030bfe724edc96a884e2ebf8) ] make :dev-http properly handle index files in classpath roots
+
+## [2.20.11](https://github.com/thheller/shadow-cljs/compare/42a98e12059826724eb5c2d83571ba9bd9f3c6d4...b034b24d8d20e538afe31b6a19087f021d0813e2) - 2022-11-15
+- [ [`b034b`](https://github.com/thheller/shadow-cljs/commit/b034b24d8d20e538afe31b6a19087f021d0813e2) ] leave note about core.async fix
+- [ [`b48d9`](https://github.com/thheller/shadow-cljs/commit/b48d91f21b744cab909acb004e996a3a8d200563) ] try to bump core.async again
+- [ [`8d0c3`](https://github.com/thheller/shadow-cljs/commit/8d0c32fbd8460b53ce38ae27a602d8b193a51ba9) ] revert core.async bump. dunno why it fails
+- [ [`c0b70`](https://github.com/thheller/shadow-cljs/commit/c0b70e5dca3d6d458ed471e94c21f5cc0b9625b4) ] try to get useful error reports
+- [ [`96782`](https://github.com/thheller/shadow-cljs/commit/9678204fc9f067528db692195db9d06b176b3acc) ] fix ci caches?
+- [ [`2b143`](https://github.com/thheller/shadow-cljs/commit/2b143d0ce5046fb1af81bb9ea368cb4eb4ece5a6) ] remove guava dep
+- [ [`2f081`](https://github.com/thheller/shadow-cljs/commit/2f081170102713796ac29b0c47d37e6ad88ba312) ] misc smaller dep bumps
+- [ [`7ef10`](https://github.com/thheller/shadow-cljs/commit/7ef10c9f7f2ecfb83028a2dda00383bf4132b92f) ] shadow-undertow bump
+- [ [`42a98`](https://github.com/thheller/shadow-cljs/commit/42a98e12059826724eb5c2d83571ba9bd9f3c6d4) ] closure-compiler bump and fixes
+
+## [2.20.10](https://github.com/thheller/shadow-cljs/compare/319298a7ca0e28ae1e4b0a4e4752b9ecca6d2857...319298a7ca0e28ae1e4b0a4e4752b9ecca6d2857) - 2022-11-10
+- [ [`31929`](https://github.com/thheller/shadow-cljs/commit/319298a7ca0e28ae1e4b0a4e4752b9ecca6d2857) ] fix constants replacement optimization conflicts
+
+## [2.20.9](https://github.com/thheller/shadow-cljs/compare/559628b0721778ffb8615aaf98d81529f00d74d6...559628b0721778ffb8615aaf98d81529f00d74d6) - 2022-11-10
+- [ [`55962`](https://github.com/thheller/shadow-cljs/commit/559628b0721778ffb8615aaf98d81529f00d74d6) ] support "standard" config directory location (eg. XDG_CONFIG_HOME)
+
+## [2.20.8](https://github.com/thheller/shadow-cljs/compare/5cf0ea00a08e4de75d30465a9d84b8ad6846e2f8...5cf0ea00a08e4de75d30465a9d84b8ad6846e2f8) - 2022-11-09
+- [ [`5cf0e`](https://github.com/thheller/shadow-cljs/commit/5cf0ea00a08e4de75d30465a9d84b8ad6846e2f8) ] add :trusted-strings true closure compiler option
+
+## [2.20.7](https://github.com/thheller/shadow-cljs/compare/723fbf0075c8a06ba452104b61fb97ca6609f573...723fbf0075c8a06ba452104b61fb97ca6609f573) - 2022-10-27
+- [ [`723fb`](https://github.com/thheller/shadow-cljs/commit/723fbf0075c8a06ba452104b61fb97ca6609f573) ] tune :js-provider :import + :esm for JS side tree shaking
+
+## [2.20.6](https://github.com/thheller/shadow-cljs/compare/46af511c8b011ce2846c8106ff268df0a4d49c4a...46af511c8b011ce2846c8106ff268df0a4d49c4a) - 2022-10-23
+- [ [`46af5`](https://github.com/thheller/shadow-cljs/commit/46af511c8b011ce2846c8106ff268df0a4d49c4a) ] fix :js-provider :import not finding magic symbols
+
+## [2.20.5](https://github.com/thheller/shadow-cljs/compare/d1d1c73ae2332c48f190e937f0712b732435f7b4...a2ce3ad9991abf8cc7247bbe79b90fdeedfe217e) - 2022-10-14
+- [ [`a2ce3`](https://github.com/thheller/shadow-cljs/commit/a2ce3ad9991abf8cc7247bbe79b90fdeedfe217e) ] docs(README): fix for broken link to Boodle project (accounting SPA) (#1047)
+- [ [`6ba35`](https://github.com/thheller/shadow-cljs/commit/6ba356bb418748df6a5fb9d98788c8b8a6786bac) ] fix externs inference to account for hinted types
+- [ [`d1d1c`](https://github.com/thheller/shadow-cljs/commit/d1d1c73ae2332c48f190e937f0712b732435f7b4) ] add missing file
+
+## [2.20.4](https://github.com/thheller/shadow-cljs/compare/c44293469e615813801672ecaf6d37e370e0a62e...c44293469e615813801672ecaf6d37e370e0a62e) - 2022-10-13
+- [ [`c4429`](https://github.com/thheller/shadow-cljs/commit/c44293469e615813801672ecaf6d37e370e0a62e) ] fix :esm target not properly importing :depends-on modules
+
+## [2.20.3](https://github.com/thheller/shadow-cljs/compare/0b6854ee36f9de59f78fc073809e05db4f00d37b...e53240007b45ab891f23edcb96b2ed377fafc471) - 2022-10-09
+- [ [`e5324`](https://github.com/thheller/shadow-cljs/commit/e53240007b45ab891f23edcb96b2ed377fafc471) ] fix goog.module requires in the REPL
+- [ [`bf38b`](https://github.com/thheller/shadow-cljs/commit/bf38b2c4c68c2dbd634948155ca0572cefcf739b) ] also add throw
+- [ [`0b685`](https://github.com/thheller/shadow-cljs/commit/0b6854ee36f9de59f78fc073809e05db4f00d37b) ] add undefined as known global so it doesn't end up in externs
+
 ## [2.20.2](https://github.com/thheller/shadow-cljs/compare/531859df882badc9601d5008ee3d98463296227e...531859df882badc9601d5008ee3d98463296227e) - 2022-09-16
 - [ [`53185`](https://github.com/thheller/shadow-cljs/commit/531859df882badc9601d5008ee3d98463296227e) ] fix breakage when npm packages don't match their installed name
 

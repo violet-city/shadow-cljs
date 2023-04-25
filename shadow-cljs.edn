@@ -29,7 +29,9 @@
 
  :prepl {:browser 12345}
 
- :plugins [demo.dummy-plugin]
+ :plugins
+ [demo.dummy-plugin
+  shadow.insight.plugin]
 
  :socket-repl {:port 8204}
 
@@ -153,6 +155,7 @@
    {;; :strip-type-prefixes #{"cljs.pprint"}
     :shadow-keywords true
     :global-goog-object&array true
+    :source-map true
     ;; :output-feature-set :es6
     ;; :output-wrapper false
     ;; :closure-output-charset "US-ASCII"
@@ -203,6 +206,7 @@
   :test-esm
   {:target :esm
    :output-dir "out/demo-browser/public/esm-js"
+   :build-hooks [(shadow.build/tap-hook)]
    :modules
    {:shared {}
     :a
@@ -215,7 +219,12 @@
     :b
     {:exports
      {default demo.esm.b/bar}
-     :depends-on #{:shared}}}}
+     :depends-on #{:shared}}
+    :c
+    {:exports
+     {default demo.esm.c/foo}
+     :depends-on #{:b}}}
+   }
 
   :now-lambda
   {:target :node-library
@@ -492,6 +501,7 @@
   :npm
   {:target :npm-module
    :output-dir "out/demo-npm/lib"
+   :runtime :node
    :closure-defines {demo.npm/SOMETHING "BAR"}
    :entries [demo.npm
              #_demo.rel-require]}

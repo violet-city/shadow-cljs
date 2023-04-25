@@ -117,12 +117,12 @@
             (reduce
               (fn [req-handler root]
                 (if (str/starts-with? root "classpath:")
-                  [::undertow/classpath {:root (subs root 10)} req-handler]
+                  [::undertow/classpath (assoc config :root (subs root 10)) req-handler]
 
                   (let [root-dir (io/file root)]
                     (when-not (.exists root-dir)
                       (io/make-parents (io/file root-dir "index.html")))
-                    [::undertow/file {:root-dir root-dir} req-handler])))
+                    [::undertow/file (assoc config :root-dir root-dir) req-handler])))
               req-handler
               (reverse roots))
 
@@ -145,7 +145,8 @@
              [::undertow/soft-cache
               [::undertow/ws-upgrade
                [::undertow/ws-ring {:handler-fn http-handler-fn}]
-               [::undertow/compress {} req-handler]]]]
+               [::undertow/headers-inject {:headers {"Access-Control-Allow-Origin" "*"}}
+                [::undertow/compress {} req-handler]]]]]
 
             http-options
             (-> {:port port

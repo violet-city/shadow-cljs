@@ -1,11 +1,10 @@
 (ns shadow.build.js-support
-  (:require [shadow.build.resource :as rc]
-            [shadow.cljs.util :as util]
-            [shadow.build.data :as data]
-            [shadow.build.closure :as closure]
-            [clojure.string :as str]
-            [shadow.build.npm :as npm]
-            [shadow.build.classpath :as cp])
+  (:require
+    [shadow.cljs.util :as util]
+    [shadow.build.data :as data]
+    [clojure.string :as str]
+    [shadow.build.npm :as npm]
+    [shadow.build.classpath :as cp])
   (:import (com.google.javascript.jscomp.deps ModuleNames)))
 
 (defn shim-require-resource
@@ -122,7 +121,7 @@
               )))}))
 
 (defn shim-import-resource
-  [state js-name]
+  [{:shadow.build/keys [mode] :as state} js-name]
   (let [import-alias
         (-> (str "esm_" (ModuleNames/fileToModuleName js-name))
             ;; https://cdn.pika.dev/preact@^10.0.0
@@ -133,7 +132,9 @@
             (symbol))
 
         fake-ns
-        (symbol (str "shadow.esm." import-alias))
+        (if (= :release mode)
+          import-alias
+          (symbol (str "shadow.esm." import-alias)))
 
         resource-name
         (str fake-ns ".js")
@@ -158,5 +159,7 @@
      :requires #{}
      :deps ['goog]
      :source
-     (str "goog.provide(\"" fake-ns "\");\n"
-          fake-ns " = " import-alias ";\n")}))
+     (if (= :release mode)
+       ""
+       (str "goog.provide(\"" fake-ns "\");\n"
+            fake-ns " = " import-alias ";\n"))}))

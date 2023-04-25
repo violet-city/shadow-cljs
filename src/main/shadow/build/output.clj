@@ -121,6 +121,15 @@
   (with-open [rdr (io/reader (StringReader. text))]
     (count (line-seq rdr))))
 
+(defn library-source? [src]
+  (or (:from-jar src)
+      ;; generated sources
+      (:virtual src)
+      ;; npm shadow-js
+      (:shadow.build.npm/package src)
+      ;; dev related stuff
+      (str/starts-with? (:resource-name src) "shadow/cljs/devtools/")))
+
 (defn encode-source-map
   [state
    {:keys [resource-name prepend output-name] :as src}
@@ -144,6 +153,10 @@
         (cond->
           (get-in state [:compiler-options :source-map-include-sources-content])
           (assoc "sourcesContent" [source])
+
+          ;; https://developer.chrome.com/blog/devtools-better-angular-debugging/#the-x_google_ignorelist-source-map-extension
+          (library-source? src)
+          (assoc "x_google_ignoreList" [0])
 
           (seq prepend-lines)
           (update "mappings" (fn [s] (str prepend-lines s)))))))
@@ -250,15 +263,6 @@
 
         (let [output (str js (generate-source-map state src output js-file ""))]
           (spit js-file output))))))
-
-(defn flush-sources
-  ([{:keys [build-sources] :as state}]
-   (flush-sources state build-sources))
-  ([state source-ids]
-   (doseq [src-id source-ids]
-     (async/queue-task state #(flush-source state src-id)))
-
-   state))
 
 (defmulti flush-optimized-module
   (fn [state mod]
@@ -376,8 +380,24 @@
 
                       shadow-js-outputs))
 
-                sm
+                {:strs [sources] :as sm}
                 (json/read-str source-map-json)
+
+                ignore
+                (reduce-kv
+                  (fn [ignore idx source-name]
+                    (let [id (get-in state [:name->id source-name])]
+                      (if-not id
+                        (conj ignore idx)
+                        (let [src (get-in state [:sources id])]
+                          (if-not (library-source? src)
+                            ignore
+                            (conj ignore idx))))))
+                  []
+                  sources)
+
+                sm
+                (assoc sm "x_google_ignoreList" ignore)
 
                 sm-index
                 (-> sm-index
@@ -398,14 +418,6 @@
   (when-not (seq modules)
     (throw (ex-info "flush before optimize?" {})))
 
-  (when (= :js (get-in state [:build-options :module-format]))
-    (let [env-file
-          (data/output-file state "cljs_env.js")]
-
-      (io/make-parents env-file)
-      (spit env-file
-        (str "module.exports = {};\n"))))
-
   (util/with-logged-time
     [state {:type :flush-optimized}]
 
@@ -422,7 +434,7 @@
       (subs s 0 idx)
       s)))
 
-(defn js-module-src-prepend [state {:keys [output-name] :as src} require?]
+(defn js-module-src-prepend [state {:keys [resource-name output-name] :as src}]
   (let [dep-syms
         (data/deps->syms state src)
 
@@ -430,26 +442,38 @@
         (->> (get-in state [:compiler-env :shadow/ns-roots])
              (map comp/munge))]
 
-    (str (when require?
-           (str "var $CLJS = require(\"./cljs_env\");\n"
-                "var $jscomp = $CLJS.$jscomp;\n"))
+    (str "var $CLJS = require(\"./cljs_env\");\n"
+         "var $jscomp = $CLJS.$jscomp;\n"
 
          ;; :npm-module is picky about this
          "var COMPILED = false;\n"
 
-         (when require?
-           ;; emit requires to actual files to ensure that they were loaded properly
-           ;; can't ensure that the files were loaded before this as goog.require would
-           (->> dep-syms
-                (remove #{'goog})
-                (map #(data/get-source-id-by-provide state %))
-                (distinct)
-                (map #(data/get-source-by-id state %))
-                (remove :goog-src)
-                (map (fn [{:keys [output-name] :as x}]
-                       (str "require(\"./" output-name "\");")))
-                (str/join "\n")))
+         ;; emit requires to actual files to ensure that they were loaded properly
+         ;; can't ensure that the files were loaded before this as goog.require would
+         (->> dep-syms
+              (remove #{'goog})
+              (map #(data/get-source-id-by-provide state %))
+              (distinct)
+              (map #(data/get-source-by-id state %))
+              (remove :goog-src)
+              (map (fn [{:keys [output-name] :as x}]
+                     (str "require(\"./" output-name "\");")))
+              (str/join "\n"))
          "\n"
+
+         ;; have all project files load the worker inject automatically
+         ;; removes the need for the user to handle this from the JS side
+         (when (and (= :cljs (:type src))
+                    (:worker-info state)
+                    (not (:from-jar src))
+                    (not (str/starts-with? resource-name "shadow/"))
+                    (not (str/starts-with? resource-name "cljs/")))
+           (case (:runtime (:shadow.build/config state))
+             :browser
+             "require(\"./shadow.cljs.devtools.client.browser.js\");\n"
+             :node
+             "require(\"./shadow.cljs.devtools.client.npm_module.js\");\n"
+             nil))
 
          ;; take existing roots or create in case they don't exist yet
          (->> roots
@@ -460,25 +484,40 @@
          "\n$CLJS.SHADOW_ENV.setLoaded(" (pr-str output-name) ");\n"
          "\n")))
 
-(defn js-module-src-append [state {:keys [ns provides] :as src}]
-  ;; export the shortest name always, some goog files have multiple provides
-  (let [export
-        (->> provides
-             (map str)
-             (sort)
-             (map comp/munge)
-             (first))]
+(defn js-module-src-append [state {:keys [ns] :as src}]
+  (if-not ns
+    ;; none-cljs, export the shortest name always, some goog files have multiple provides
+    (str "\nmodule.exports = "
+         (->> (:provides src)
+              (map str)
+              (sort)
+              (map comp/munge)
+              (first))
+         ";\n")
+    ;; cljs ns, export vars.
+    ;; enumarable only if tagged with :export or :export-as
+    (->> (get-in state [:compiler-env ::ana/namespaces ns :defs])
+         (vals)
+         (map (fn [def]
+                (let [{:keys [export export-as] :as def-meta}
+                      (:meta def)
 
-    (str (when-not ns ;; none-cljs
-           (str "\nmodule.exports = " export ";\n"))
-         (->> (get-in state [:compiler-env ::ana/namespaces ns :defs])
-              (vals)
-              (map (fn [def]
-                     (let [def-name (symbol (name (:name def)))]
-                       (str "Object.defineProperty(module.exports, \""
-                            (if (= 'default def-name) "default" (comp/munge def-name)) ;; avoid munge to default$
-                            "\", { enumerable: " (get-in def [:meta :export] false) ", get: function() { return " export "." (comp/munge def-name) "; } });"))))
-              (str/join "\n")))))
+                      export-name
+                      (if (string? export-as)
+                        export-as
+
+                        (let [def-name (symbol (name (:name def)))]
+                          (if (= 'default def-name) ;; avoid munge to default$
+                            "default"
+                            (comp/munge def-name))))]
+
+                  (str "Object.defineProperty(module.exports, \"" export-name "\", { "
+                       "enumerable: " (or (:export def-meta false)
+                                          (string? export-as))
+                       ", "
+                       "get: function() { return " (comp/munge (:name def)) "; }"
+                       " });"))))
+         (str/join "\n"))))
 
 (def goog-global-snippet
   "goog.global =\n    // Check `this` first for backwards compatibility.\n    // Valid unless running as an ES module or in a function wrapper called\n    //   without setting `this` properly.\n    // Note that base.js can't usefully be imported as an ES module, but it may\n    // be compiled into bundles that are loadable as ES modules.\n    this ||\n    // https://developer.mozilla.org/en-US/docs/Web/API/Window/self\n    // For in-page browser environments and workers.\n    self;")
@@ -493,7 +532,7 @@
          :browser
          "var CLJS_GLOBAL = globalThis;\n"
          ;; default, tries to figure it out on its own
-         "var CLJS_GLOBAL = process.browser ? (typeof(window) != 'undefined' ? window : self) : global;\n")
+         "var CLJS_GLOBAL = (typeof(globalThis) != 'undefined') ? globalThis : global;\n")
 
        ;; closure accesses these defines via goog.global.CLOSURE_DEFINES
        "var CLOSURE_DEFINES = CLJS_GLOBAL.CLOSURE_DEFINES = $CLJS.CLOSURE_DEFINES = " (closure-defines-json state) ";\n"
@@ -528,12 +567,54 @@
        "\nmodule.exports = $CLJS;\n"
        ))
 
-(defn flush-dev-js-modules
-  [{:shadow.build/keys [build-info] :as state} mode config]
+(defn flush-dev-js-module-source [state {:keys [output-name last-modified] :as src}]
+  (let [{:keys [js] :as output}
+        (data/get-output! state src)
 
+        target
+        (data/output-file state output-name)]
+
+    ;; flush everything if env was modified, otherwise only flush modified
+    (when (or (not (.exists target)) (>= last-modified (.lastModified target)))
+
+      (let [prepend
+            (js-module-src-prepend state src)
+
+            content
+            (str prepend
+                 js
+                 (js-module-src-append state src)
+                 (generate-source-map state src output target prepend))]
+
+        (spit target content)
+        ))))
+
+;; called from shadow.cljs.repl AND targets
+;; need it to be npm-module aware so it doesn't end up flushing cljs-runtime sources
+;; which are useless for npm-module. rather do this here than in shadow.cljs.repl
+(defn flush-sources
+  ([{:keys [build-sources] :as state}]
+   (flush-sources state build-sources))
+  ([state source-ids]
+
+   (if (not= :js (get-in state [:build-options :module-format]))
+     ;; regular goog style output
+     (doseq [src-id source-ids]
+       (async/queue-task state #(flush-source state src-id)))
+     ;; npm-module style output
+     (doseq [src-id source-ids
+             :when (not= src-id goog-base-id)
+             :let [src (get-in state [:sources src-id])]
+             :when (not (:goog-src src))]
+
+       (async/queue-task state #(flush-dev-js-module-source state src))))
+
+   state))
+
+(defn flush-dev-js-modules
+  [state mode config]
   (util/with-logged-time [state {:type :npm-flush
                                  :output-path (.getAbsolutePath (get-in state [:build-options :output-dir]))}]
-
     (let [env-file
           (data/output-file state "cljs_env.js")
 
@@ -544,48 +625,25 @@
                     (remove #{goog-base-id})
                     (map #(data/get-source-by-id state %))
                     (filter :goog-src)
-                    (map #(data/get-output! state %))
-                    (map :js)
+                    (map (fn [{:keys [output-name] :as src}]
+                           (let [{:keys [js]} (data/get-output! state src)]
+                             (str js
+                                  "\n$CLJS.SHADOW_ENV.setLoaded(" (pr-str output-name) ");\n"))))
                     (str/join "\n")))
 
           env-modified?
           (or (not (.exists env-file))
               (not= env-content (slurp env-file)))]
 
+      ;; the goal is to avoid touching the env file as much as possible
+      ;; other tools might trigger a reload and reloading the env destroys everything
       (when env-modified?
         (io/make-parents env-file)
-        (spit env-file env-content))
+        (spit env-file env-content))))
 
-      (doseq [src-id (:build-sources state)
-              :when (not= src-id goog-base-id)
-              :let [src (get-in state [:sources src-id])]
-              :when (not (:goog-src src))]
+  (flush-sources state)
 
-        (let [{:keys [output-name last-modified]}
-              src
-
-              {:keys [js] :as output}
-              (data/get-output! state src)
-
-              target
-              (data/output-file state output-name)]
-
-          ;; flush everything if env was modified, otherwise only flush modified
-          (when (or env-modified?
-                    (contains? (:compiled build-info) src-id)
-                    (not (.exists target))
-                    (>= last-modified (.lastModified target)))
-
-            (let [prepend
-                  (js-module-src-prepend state src true)
-
-                  content
-                  (str prepend
-                       js
-                       (js-module-src-append state src)
-                       (generate-source-map state src output target prepend))]
-
-              (spit target content)
-              ))))))
   state)
+
+
 
